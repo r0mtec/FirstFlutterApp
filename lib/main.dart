@@ -14,7 +14,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const MyHomePage(title: 'Flutter rocks'),
+      home: const MyHomePage(title: 'Буслаев Романг Пибд-32'),
     );
   }
 }
