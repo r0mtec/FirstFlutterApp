@@ -1,0 +1,10 @@
+{
+  "appTitle": "Lab 7 — DB + localization",
+  "searchHint": "Book search",
+  "searchButton": "Search",
+  "favorites": "Favorites",
+  "addedToFav": "Added to favorites",
+  "removedFromFav": "Removed from favorites",
+  "pullToRefresh": "Pull to refresh",
+  "errorLoad": "Load error"
+}

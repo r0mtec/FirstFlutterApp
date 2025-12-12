@@ -1,0 +1,10 @@
+{
+  "appTitle": "Лаба 7 — БД + локализация",
+  "searchHint": "Поиск книг",
+  "searchButton": "Найти",
+  "favorites": "Избранное",
+  "addedToFav": "Добавлено в избранное",
+  "removedFromFav": "Удалено из избранного",
+  "pullToRefresh": "Потяни вниз для обновления",
+  "errorLoad": "Ошибка загрузки"
+}
