@@ -1,22 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: BooksSearchPage(),
-    );
-  }
-}
 
 class BookDto {
   final String title;
@@ -59,19 +52,19 @@ abstract class IBooksRepository {
   Future<List<BookDto>> searchBooks(String query);
 }
 
-
 class OpenLibraryBooksRepository implements IBooksRepository {
   final http.Client _client;
 
-  OpenLibraryBooksRepository({http.Client? client}) : _client = client ?? http.Client();
+  OpenLibraryBooksRepository({http.Client? client})
+      : _client = client ?? http.Client();
 
   @override
   Future<List<BookDto>> searchBooks(String query) async {
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return <BookDto>[];
+    final q = query.trim();
+    if (q.isEmpty) return <BookDto>[];
 
     final uri = Uri.parse('https://openlibrary.org/search.json')
-        .replace(queryParameters: <String, String>{'q': trimmed});
+        .replace(queryParameters: {'q': q});
 
     final response = await _client.get(uri);
 
@@ -85,15 +78,229 @@ class OpenLibraryBooksRepository implements IBooksRepository {
     final docs = data['docs'];
     if (docs is! List) return <BookDto>[];
 
-    final items = docs.take(20);
-
-    return items
+    return docs
+        .take(20)
         .whereType<Map<String, dynamic>>()
         .map(BookDto.fromJson)
         .toList(growable: false);
   }
 }
 
+
+
+sealed class BooksEvent extends Equatable {
+  const BooksEvent();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class BooksQueryChanged extends BooksEvent {
+  final String query;
+
+  const BooksQueryChanged(this.query);
+
+  @override
+  List<Object?> get props => [query];
+}
+
+class BooksRefreshRequested extends BooksEvent {
+  const BooksRefreshRequested();
+}
+
+
+class BooksState extends Equatable {
+  final String query;
+  final bool isLoading;
+  final bool isRefreshing;
+  final String? error;
+  final List<BookDto> books;
+
+  const BooksState({
+    required this.query,
+    required this.isLoading,
+    required this.isRefreshing,
+    required this.error,
+    required this.books,
+  });
+
+  factory BooksState.initial() => const BooksState(
+    query: '',
+    isLoading: false,
+    isRefreshing: false,
+    error: null,
+    books: <BookDto>[],
+  );
+
+  BooksState copyWith({
+    String? query,
+    bool? isLoading,
+    bool? isRefreshing,
+    String? error,
+    List<BookDto>? books,
+    bool clearError = false,
+  }) {
+    return BooksState(
+      query: query ?? this.query,
+      isLoading: isLoading ?? this.isLoading,
+      isRefreshing: isRefreshing ?? this.isRefreshing,
+      error: clearError ? null : (error ?? this.error),
+      books: books ?? this.books,
+    );
+  }
+
+  @override
+  List<Object?> get props => [query, isLoading, isRefreshing, error, books];
+}
+
+
+EventTransformer<T> debounce<T>(Duration duration) {
+  return (events, mapper) {
+    return events.debounceTime(duration).switchMap(mapper);
+  };
+}
+
+
+extension _StreamDebounce<T> on Stream<T> {
+  Stream<T> debounceTime(Duration duration) {
+    Timer? timer;
+    StreamController<T>? controller;
+
+    controller = StreamController<T>(
+      onListen: () {
+        final sub = listen(
+              (event) {
+            timer?.cancel();
+            timer = Timer(duration, () {
+              if (!controller!.isClosed) controller.add(event);
+            });
+          },
+          onError: controller!.addError,
+          onDone: () async {
+            timer?.cancel();
+            await controller!.close();
+          },
+          cancelOnError: false,
+        );
+
+        controller!.onCancel = () async {
+          timer?.cancel();
+          await sub.cancel();
+        };
+      },
+    );
+
+    return controller.stream;
+  }
+
+  Stream<R> switchMap<R>(Stream<R> Function(T) mapper) {
+    StreamController<R>? controller;
+    StreamSubscription<T>? outerSub;
+    StreamSubscription<R>? innerSub;
+
+    controller = StreamController<R>(
+      onListen: () {
+        outerSub = listen((event) async {
+          await innerSub?.cancel();
+          innerSub = mapper(event).listen(
+            controller!.add,
+            onError: controller!.addError,
+          );
+        }, onError: controller!.addError, onDone: () async {
+          await innerSub?.cancel();
+          await controller!.close();
+        });
+
+        controller!.onCancel = () async {
+          await innerSub?.cancel();
+          await outerSub?.cancel();
+        };
+      },
+    );
+
+    return controller.stream;
+  }
+}
+
+
+class BooksBloc extends Bloc<BooksEvent, BooksState> {
+  final IBooksRepository _repo;
+
+  BooksBloc(this._repo) : super(BooksState.initial()) {
+    on<BooksQueryChanged>(
+      _onQueryChanged,
+      transformer: debounce(const Duration(milliseconds: 450)),
+    );
+    on<BooksRefreshRequested>(_onRefreshRequested);
+  }
+
+  Future<void> _onQueryChanged(
+      BooksQueryChanged event,
+      Emitter<BooksState> emit,
+      ) async {
+    final newQuery = event.query;
+
+    emit(state.copyWith(
+      query: newQuery,
+      isLoading: true,
+      clearError: true,
+    ));
+
+    try {
+      final books = await _repo.searchBooks(newQuery);
+      emit(state.copyWith(
+        isLoading: false,
+        books: books,
+      ));
+    } catch (e) {
+      emit(state.copyWith(
+        isLoading: false,
+        error: 'Ошибка загрузки: $e',
+      ));
+    }
+  }
+
+  Future<void> _onRefreshRequested(
+      BooksRefreshRequested event,
+      Emitter<BooksState> emit,
+      ) async {
+    if (state.query.trim().isEmpty) return;
+
+    emit(state.copyWith(isRefreshing: true, clearError: true));
+
+    try {
+      final books = await _repo.searchBooks(state.query);
+      emit(state.copyWith(
+        isRefreshing: false,
+        books: books,
+      ));
+    } catch (e) {
+      emit(state.copyWith(
+        isRefreshing: false,
+        error: 'Ошибка обновления: $e',
+      ));
+    }
+  }
+}
+
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return RepositoryProvider<IBooksRepository>(
+      create: (_) => OpenLibraryBooksRepository(),
+      child: BlocProvider(
+        create: (ctx) => BooksBloc(ctx.read<IBooksRepository>()),
+        child: const MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: BooksSearchPage(),
+        ),
+      ),
+    );
+  }
+}
 
 class BooksSearchPage extends StatefulWidget {
   const BooksSearchPage({super.key});
@@ -104,41 +311,6 @@ class BooksSearchPage extends StatefulWidget {
 
 class _BooksSearchPageState extends State<BooksSearchPage> {
   final TextEditingController _controller = TextEditingController();
-  final IBooksRepository _repo = OpenLibraryBooksRepository();
-
-  bool _loading = false;
-  String? _error;
-  List<BookDto> _books = const [];
-
-  Future<void> _search() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final result = await _repo.searchBooks(_controller.text);
-      setState(() {
-        _books = result;
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'Ошибка загрузки: $e';
-      });
-    } finally {
-      setState(() {
-        _loading = false;
-      });
-    }
-  }
-
-  void _openDetails(BookDto book) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => BookDetailsPage(book: book),
-      ),
-    );
-  }
 
   @override
   void dispose() {
@@ -146,58 +318,81 @@ class _BooksSearchPageState extends State<BooksSearchPage> {
     super.dispose();
   }
 
+  Future<void> _onRefresh(BuildContext context) async {
+    context.read<BooksBloc>().add(const BooksRefreshRequested());
+
+    await context.read<BooksBloc>().stream.firstWhere((s) => !s.isRefreshing);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Лаба 5 — Search API')),
+      appBar: AppBar(title: const Text('Лаба 6 — BLoC + Debounce')),
       body: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _search(),
-                    decoration: const InputDecoration(
-                      labelText: 'Поиск книг (например: harry potter)',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: _loading ? null : _search,
-                  child: const Text('Найти'),
-                ),
-              ],
+            TextField(
+              controller: _controller,
+              textInputAction: TextInputAction.search,
+              decoration: const InputDecoration(
+                labelText: 'Поиск (debounce ~450ms)',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (text) {
+                context.read<BooksBloc>().add(BooksQueryChanged(text));
+              },
+              onSubmitted: (text) {
+                context.read<BooksBloc>().add(BooksQueryChanged(text));
+              },
             ),
             const SizedBox(height: 12),
-            if (_loading) const LinearProgressIndicator(),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(_error!, style: const TextStyle(color: Colors.red)),
-            ],
+            BlocBuilder<BooksBloc, BooksState>(
+              builder: (context, state) {
+                if (state.isLoading) {
+                  return const LinearProgressIndicator();
+                }
+                if (state.error != null) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      state.error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
             const SizedBox(height: 8),
             Expanded(
-              child: _books.isEmpty && !_loading
-                  ? const Center(child: Text('Введите запрос и нажмите “Найти”.'))
-                  : ListView.builder(
-                itemCount: _books.length,
-                itemBuilder: (context, index) {
-                  final book = _books[index];
-                  return Card(
-                    child: ListTile(
-                      leading: _CoverImage(url: book.coverUrl),
-                      title: Text(book.title),
-                      subtitle: Text(
-                        'Автор: ${book.author ?? "не указан"}\n'
-                            'Год: ${book.firstPublishYear?.toString() ?? "—"}',
-                      ),
-                      isThreeLine: true,
-                      onTap: () => _openDetails(book),
+              child: BlocBuilder<BooksBloc, BooksState>(
+                builder: (context, state) {
+                  return RefreshIndicator(
+                    onRefresh: () => _onRefresh(context),
+                    child: state.books.isEmpty
+                        ? ListView(
+                      children: const [
+                        SizedBox(height: 120),
+                        Center(child: Text('Введите запрос, результаты появятся ниже.')),
+                      ],
+                    )
+                        : ListView.builder(
+                      itemCount: state.books.length,
+                      itemBuilder: (context, index) {
+                        final book = state.books[index];
+                        return Card(
+                          child: ListTile(
+                            leading: _CoverImage(url: book.coverUrl),
+                            title: Text(book.title),
+                            subtitle: Text(
+                              'Автор: ${book.author ?? "не указан"}\n'
+                                  'Год: ${book.firstPublishYear?.toString() ?? "—"}',
+                            ),
+                            isThreeLine: true,
+                          ),
+                        );
+                      },
                     ),
                   );
                 },
@@ -218,11 +413,7 @@ class _CoverImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (url == null) {
-      return const SizedBox(
-        width: 48,
-        height: 64,
-        child: Icon(Icons.menu_book),
-      );
+      return const SizedBox(width: 48, height: 64, child: Icon(Icons.menu_book));
     }
 
     return ClipRRect(
@@ -232,51 +423,8 @@ class _CoverImage extends StatelessWidget {
         width: 48,
         height: 64,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => const SizedBox(
-          width: 48,
-          height: 64,
-          child: Icon(Icons.broken_image),
-        ),
-      ),
-    );
-  }
-}
-
-class BookDetailsPage extends StatelessWidget {
-  final BookDto book;
-
-  const BookDetailsPage({super.key, required this.book});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Детали')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Center(
-            child: _CoverImage(url: book.coverUrl),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            book.title,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
-          Text('Автор: ${book.author ?? "не указан"}', style: const TextStyle(fontSize: 16)),
-          const SizedBox(height: 6),
-          Text('Год первой публикации: ${book.firstPublishYear?.toString() ?? "—"}',
-              style: const TextStyle(fontSize: 16)),
-          const SizedBox(height: 16),
-          const Text(
-            'Детальная информация (пример):\n'
-                '• Источник данных: OpenLibrary Search API\n'
-                '• Запрос выполняется по параметру q\n'
-                '• DTO: BookDto\n'
-                '• Repository: IBooksRepository / OpenLibraryBooksRepository',
-            style: TextStyle(fontSize: 15),
-          ),
-        ],
+        errorBuilder: (_, __, ___) =>
+        const SizedBox(width: 48, height: 64, child: Icon(Icons.broken_image)),
       ),
     );
   }
