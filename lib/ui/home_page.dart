@@ -1,33 +1,18 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:lab/data/repositories/openlibrary_repository.dart';
-import 'package:lab/domain/models/card.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-class HomePage extends StatefulWidget {
+import '../data/utils/debounce.dart';
+import 'details_page.dart';
+import '../bloc/bloc.dart';
+import '../bloc/events.dart';
+import '../bloc/state.dart';
+import '../domain/models/card.dart';
+
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  final TextEditingController _controller =
-  TextEditingController(text: 'harry potter');
-  String _query = 'harry potter';
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _search() {
-    final value = _controller.text.trim();
-    setState(() {
-      _query = value.isEmpty ? 'harry potter' : value;
-    });
-  }
-
-  void _navToDetails(BuildContext context, CardData data) {
+  void _navToDetails(BuildContext context, data) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => DetailsPage(data: data),
@@ -35,211 +20,114 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _showSnackBar(BuildContext context, String text) {
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text)),
-    );
+  void _showSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(milliseconds: 900),
+        ),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
-    final future = OpenLibraryRepository().loadData(_query);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Lab 5 — API + DTO + Repo')),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Поиск книг (OpenLibrary)',
-                    ),
-                    onSubmitted: (_) => _search(),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: _search,
-                  child: const Text('Найти'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: FutureBuilder<List<CardData>?>(
-                future: future,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Text('Ошибка: ${snapshot.error}'),
-                    );
-                  }
-
-                  final data = snapshot.data;
-                  if (data == null) {
-                    return const Center(child: Text('Ошибка загрузки (data == null)'));
-                  }
-
-                  if (data.isEmpty) {
-                    return const Center(child: Text('Ничего не найдено'));
-                  }
-
-                  return ListView.builder(
-                    itemCount: data.length,
-                    itemBuilder: (context, index) {
-                      final item = data[index];
-                      return AppCard(
-                        data: item,
-                        onTap: () => _navToDetails(context, item),
-                        onLongPress: () => _showSnackBar(
-                          context,
-                          'Открываю: ${item.text}',
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
+    return const Scaffold(
+      body: _Body(),
     );
   }
 }
 
-class AppCard extends StatelessWidget {
-  final CardData data;
-  final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
+class _Body extends StatefulWidget {
+  const _Body();
 
-  const AppCard({
-    super.key,
-    required this.data,
-    this.onTap,
-    this.onLongPress,
-  });
+  @override
+  State<_Body> createState() => _BodyState();
+}
+
+class _BodyState extends State<_Body> {
+  final searchController = TextEditingController();
+
+  @override
+  void initState() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<HomeBloc>().add(const HomeLoadDataEvent());
+    });
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onRefresh() async {
+    context.read<HomeBloc>().add(HomeLoadDataEvent(search: searchController.text));
+    return Future.value();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      borderRadius: BorderRadius.circular(12),
-      child: Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return BlocConsumer<HomeBloc, HomeState>(
+      listenWhen: (prev, next) => next.snackMessage != null && next.snackMessage != prev.snackMessage,
+      listener: (context, state) {
+        final msg = state.snackMessage;
+        if (msg != null) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(msg)));
+          context.read<HomeBloc>().add(const HomeClearSnackEvent());
+        }
+      },
+      builder: (context, state) {
+        return SafeArea(
+          child: Column(
             children: [
-              Icon(data.icon, size: 32),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      data.text,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(data.descriptionText),
-                    if (data.imageUrl != null) ...[
-                      const SizedBox(height: 10),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: Image.network(
-                          data.imageUrl!,
-                          height: 180,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                          const SizedBox(
-                            height: 180,
-                            child: Center(child: Icon(Icons.broken_image)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: CupertinoSearchTextField(
+                  controller: searchController,
+                  onChanged: (search) {
+                    Debounce.run(() {
+                      context.read<HomeBloc>().add(HomeLoadDataEvent(search: search));
+                    });
+                  },
                 ),
               ),
+              if (state.isLoading)
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _onRefresh,
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: state.data.length,
+                      itemBuilder: (context, index) {
+                        final data = state.data[index];
+
+                        return PersonCard(
+                          data: data,
+                          onLike: (title, isLiked) {
+                            context.read<HomeBloc>().add(HomeToggleLikeEvent(data.id));
+
+                          },
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => DetailsPage(data: data)),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class DetailsPage extends StatelessWidget {
-  final CardData data;
-
-  const DetailsPage({super.key, required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(data.text)),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (data.imageUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  data.imageUrl!,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox(
-                    height: 220,
-                    child: Center(child: Icon(Icons.broken_image)),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 16),
-            Text(
-              data.text,
-              style: const TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              data.descriptionText,
-              style: const TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'Детальная информация',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Тут можно вывести любые дополнительные поля, описание, '
-                  'ссылки, рейтинг, список авторов и т.д.',
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 }

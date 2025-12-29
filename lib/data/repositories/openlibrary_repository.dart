@@ -3,7 +3,7 @@ import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 import 'package:lab/data/dtos/books_dto.dart';
 import 'package:lab/data/mappers/books_mapper.dart';
 import 'package:lab/data/repositories/api_interface.dart';
-import 'package:lab/domain/models/card.dart';
+import 'package:lab/domain/models/card_data.dart';
 
 class OpenLibraryRepository extends ApiInterface {
   static final Dio _dio = Dio()

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:lab/domain/models/card.dart';
+
+import '../domain/models/card_data.dart';
 
 class DetailsPage extends StatelessWidget {
   final CardData data;
@@ -9,48 +10,41 @@ class DetailsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(data.text)),
-      body: SingleChildScrollView(
+      appBar: AppBar(title: Text(data.title)),
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (data.imageUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  data.imageUrl!,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox(
-                    height: 200,
-                    child: Center(child: Icon(Icons.broken_image)),
-                  ),
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: AspectRatio(
+              aspectRatio: 16 / 10,
+              child: Image.network(
+                data.imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  color: Colors.black12,
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.image_not_supported_outlined, size: 40),
                 ),
               ),
-            const SizedBox(height: 16),
-            Text(
-              data.text,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 8),
-            Text(
-              data.descriptionText,
-              style: const TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 16),
-
-            // Любая “полная версия” — добавь то, что хочешь
-            const Text(
-              'Детальная информация',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Здесь может быть расширенное описание, доп. поля, ссылки и т.д.',
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            data.title,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            data.subtitle,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.black54),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            data.description,
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+        ],
       ),
     );
   }

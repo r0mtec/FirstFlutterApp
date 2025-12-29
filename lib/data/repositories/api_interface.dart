@@ -1,4 +1,4 @@
-import 'package:lab/domain/models/card.dart';
+import 'package:lab/domain/models/card_data.dart';
 
 abstract class ApiInterface {
   Future<List<CardData>?> loadData(String query);
